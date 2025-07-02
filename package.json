@@ -1,6 +1,7 @@
 {
   "name": "proxy-checker-serverless",
   "version": "1.0.0",
+  "type": "module",
   "main": "api/proxy-checker.js",
   "scripts": {},
   "dependencies": {
