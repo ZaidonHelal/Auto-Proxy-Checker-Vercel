@@ -3,7 +3,28 @@ import UserAgent from "user-agents";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { HttpsProxyAgent } from "https-proxy-agent";
 
+/**
+ * Helper function to set CORS headers on the response.
+ * This allows the API to be called from any domain.
+ * @param {object} res - The response object from the handler.
+ */
+const setCorsHeaders = (res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*'); // Allow any origin
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS'); // Allow POST and OPTIONS methods
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type'); // Allow Content-Type header
+};
+
 export default async function handler(req, res) {
+  // Set CORS headers for every request
+  setCorsHeaders(res);
+
+  // Browsers send a preflight OPTIONS request to check CORS permissions.
+  // We need to handle this and send a successful response.
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
+  // Only allow POST requests for the actual proxy check
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
