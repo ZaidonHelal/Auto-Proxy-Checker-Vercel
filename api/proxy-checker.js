@@ -1,7 +1,7 @@
 import { SocksProxyAgent } from "socks-proxy-agent";
-import { HttpsProxyAgent } from "https-proxy-agent";
-import axios from "axios"; // 1. تم إضافة هذا
-import UserAgent from "user-agents"; // 2. تم إضافة هذا
+import { HttpsProxyAgent } from "https-proxy-agent"; // نبقيها احتياطاً
+import axios from "axios"; // تم الإضافة: ضروري جداً
+import UserAgent from "user-agents"; // تم الإضافة: ضروري جداً
 
 /**
  * Helper function to set CORS headers on the response.
@@ -13,8 +13,10 @@ const setCorsHeaders = (res) => {
 };
 
 export default async function handler(req, res) {
+  // Set CORS headers for every request
   setCorsHeaders(res);
 
+  // Handle preflight OPTIONS request
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
   }
@@ -30,45 +32,56 @@ export default async function handler(req, res) {
   }
 
   try {
-    // التأكد من تهيئة UserAgent بشكل صحيح
+    // 1. توليد User Agent عشوائي
     const userAgent = new UserAgent().toString();
 
+    // 2. تجهيز التوثيق (Username/Password)
+    let authObj = null;
     let authPart = "";
-    if (proxyDetails.username) {
-      authPart = encodeURIComponent(proxyDetails.username);
-      if (proxyDetails.password) {
-        authPart += `:${encodeURIComponent(proxyDetails.password)}`;
-      }
-      authPart += "@";
+    
+    if (proxyDetails.username && proxyDetails.password) {
+      authObj = {
+        username: proxyDetails.username,
+        password: proxyDetails.password
+      };
+      // تجهيز الرابط النصي للـ Socks
+      authPart = `${encodeURIComponent(proxyDetails.username)}:${encodeURIComponent(proxyDetails.password)}@`;
     }
 
-    // التأكد من أن النوع بأحرف صغيرة (http وليس HTTP)
     const protocol = proxyDetails.type.toLowerCase();
     const proxyUrlString = `${protocol}://${authPart}${proxyDetails.ip}:${proxyDetails.port}`;
     
-    // إعداد إعدادات الاتصال
+    // 3. إعدادات Axios الأساسية
     const axiosConfig = {
       headers: { "User-Agent": userAgent },
-      timeout: 10000, // تقليل الوقت ليتناسب مع Vercel Free Tier (أحياناً 10 ثواني)
-      proxy: false, // مهم جداً عند استخدام agents مخصصة
+      timeout: 10000, // تقليل الوقت لـ 10 ثواني لتفادي توقف Vercel المفاجئ
     };
 
+    // 4. منطق اختيار البروكسي (السر في هذا الجزء)
     if (protocol.startsWith("socks")) {
+      // SOCKS يحتاج إلى Agent خاص دائماً
       const socksAgent = new SocksProxyAgent(proxyUrlString);
       axiosConfig.httpAgent = socksAgent;
       axiosConfig.httpsAgent = socksAgent;
-    } else if (protocol.startsWith("http")) {
-      // HttpsProxyAgent يعمل عادة للبروتوكولين، لكن يجب الحذر مع HTTP-Only
-      const httpAgent = new HttpsProxyAgent(proxyUrlString);
-      axiosConfig.httpAgent = httpAgent;
-      axiosConfig.httpsAgent = httpAgent;
+      axiosConfig.proxy = false; // نلغي بروكسي Axios الأصلي
     } else {
-      return res.status(400).json({ status: "fail", error: "Unsupported proxy protocol" });
+      // HTTP/HTTPS Proxy
+      // الحل لمشكلة stream aborted: نستخدم دعم Axios الأصلي للبروكسي بدلاً من Agent خارجي
+      // هذا يسمح لـ Axios بالتعامل بذكاء مع اتصالات HTTP العادية دون محاولة عمل Tunnel خاطئ
+      axiosConfig.proxy = {
+        protocol: 'http', // Axios غالباً يحتاج البروتوكول http للاتصال بالبروكسي نفسه
+        host: proxyDetails.ip,
+        port: parseInt(proxyDetails.port),
+        auth: authObj // تمرير التوثيق هنا مباشرة
+      };
+      
+      // نتأكد من عدم وجود Agents لتجنب التعارض
+      axiosConfig.httpAgent = undefined;
+      axiosConfig.httpsAgent = undefined;
     }
 
-    // استخدام موقع يدعم HTTP و HTTPS لتجنب مشاكل الشهادات مع البروكسيات الرخيصة
-    // ip-api ممتاز ولكنه http فقط في النسخة المجانية، مما قد يسبب مشاكل مع بعض أنواع الـ Agents التي تحاول عمل Tunneling
-    const targetUrl = "http://ip-api.com/json"; 
+    // الهدف: ip-api (http)
+    const targetUrl = "http://ip-api.com/json";
 
     const response = await axios.get(targetUrl, axiosConfig);
 
@@ -89,8 +102,9 @@ export default async function handler(req, res) {
         regionName: response.data.regionName,
       },
     });
+
   } catch (error) {
-    console.error("Proxy Check Error:", error.message); // تسجيل الخطأ في Vercel Logs
+    console.error("Proxy Check Error:", error.message);
 
     let errorMessage = error.message;
     if (
@@ -101,6 +115,8 @@ export default async function handler(req, res) {
       errorMessage = "Proxy connection timed out.";
     } else if (error.code === "ECONNREFUSED") {
       errorMessage = "Proxy connection refused.";
+    } else if (errorMessage.includes("stream has been aborted")) {
+        errorMessage = "Connection reset by proxy (Protocol mismatch).";
     }
 
     res.status(500).json({
