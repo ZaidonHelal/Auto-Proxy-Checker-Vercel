@@ -3,21 +3,32 @@ import admin from 'firebase-admin';
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  const { token, title, body } = req.body;
+  // 1. استخراج الرابط (url) من الطلب الذي سيأتي من Cloudflare
+  const { token, title, body, url } = req.body;
 
-  // تهيئة فايربيس (تعمل مرة واحدة فقط)
   if (!admin.apps.length) {
     admin.initializeApp({
-      // هنا سنستخدم متغير البيئة الذي سنضعه في إعدادات Vercel
       credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))
     });
   }
 
   try {
-    await admin.messaging().send({
+    // 2. تجهيز رسالة الإشعار الأساسية
+    const message = {
       token: token,
-      notification: { title, body }
-    });
+      notification: { title, body },
+    };
+
+    // 3. التعديل السحري: إضافة الرابط لجعل الإشعار قابلاً للضغط
+    if (url) {
+        message.webpush = {
+            fcmOptions: {
+                link: url // هذا سيجعل الإشعار يفتح الموقع عند الضغط عليه
+            }
+        };
+    }
+
+    await admin.messaging().send(message);
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('FCM Error:', error);
